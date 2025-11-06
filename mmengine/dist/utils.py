@@ -12,7 +12,7 @@ from torch import Tensor
 from torch import distributed as torch_dist
 from torch.distributed import ProcessGroup
 from mmengine.device import (is_mlu_available, is_npu_available,
-                             is_musa_available)
+                             is_musa_available, is_xpu_available)
 
 from collections.abc import Iterable, Mapping
 
@@ -63,7 +63,8 @@ def init_dist(launcher,
         launcher (str): Way to launcher multi processes. Supported launchers
             are 'pytorch', 'mpi' and 'slurm'.
         backend (str): Communication Backends. Supported backends are 'nccl',
-            'gloo' and 'mpi'. Defaults to 'nccl'.
+            'gloo', 'mpi' and, for Intel XPU builds, 'ccl'. Defaults to
+            'nccl'.
         **kwargs: keyword arguments are passed to ``init_process_group``.
     """
     timeout = kwargs.get('timeout', None)
@@ -96,7 +97,7 @@ def _init_dist_pytorch(backend, init_backend='torch', **kwargs) -> None:
 
     Args:
         backend (str): Backend of torch.distributed. Supported backends are
-            'nccl', 'gloo' and 'mpi'. Defaults to 'nccl'.
+            'nccl', 'gloo', 'mpi' and 'ccl' (for XPU). Defaults to 'nccl'.
         **kwargs: keyword arguments are passed to ``init_process_group``.
     """
     rank = int(os.environ['RANK'])
@@ -115,6 +116,18 @@ def _init_dist_pytorch(backend, init_backend='torch', **kwargs) -> None:
         torch.npu.set_device(local_rank)
         torch_dist.init_process_group(
             backend='hccl',
+            rank=rank,
+            world_size=int(os.environ['WORLD_SIZE']),
+            **kwargs)
+    elif is_xpu_available():
+        torch.xpu.set_device(local_rank)
+        if backend == 'nccl':
+            backend = 'ccl'
+        if backend == 'ccl':
+            # Register oneCCL backend when available.
+            import oneccl_bindings_for_pytorch  # noqa: F401
+        torch_dist.init_process_group(
+            backend=backend,
             rank=rank,
             world_size=int(os.environ['WORLD_SIZE']),
             **kwargs)
